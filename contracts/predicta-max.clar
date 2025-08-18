@@ -192,3 +192,97 @@
         err-not-found
       ))
     )
+    (asserts! (get resolved market) err-market-closed)
+    (asserts! (not (get claimed prediction)) err-already-claimed)
+
+    (let (
+        (winning-prediction (if (> (get end-price market) (get start-price market))
+          "up"
+          "down"
+        ))
+        (total-stake (+ (get total-up-stake market) (get total-down-stake market)))
+        (winning-stake (if (is-eq winning-prediction "up")
+          (get total-up-stake market)
+          (get total-down-stake market)
+        ))
+      )
+      (asserts! (is-eq (get prediction prediction) winning-prediction)
+        err-invalid-prediction
+      )
+
+      (let (
+          (winnings (/ (* (get stake prediction) total-stake) winning-stake))
+          (fee (/ (* winnings (var-get fee-percentage)) u100))
+          (payout (- winnings fee))
+        )
+        (try! (as-contract (stx-transfer? payout (as-contract tx-sender) tx-sender)))
+        (try! (as-contract (stx-transfer? fee (as-contract tx-sender) contract-owner)))
+
+        (map-set user-predictions {
+          market-id: market-id,
+          user: tx-sender,
+        }
+          (merge prediction { claimed: true })
+        )
+        (ok payout)
+      )
+    )
+  )
+)
+
+;; Read-Only Functions
+
+(define-read-only (get-market (market-id uint))
+  (map-get? markets market-id)
+)
+
+(define-read-only (get-user-prediction
+    (market-id uint)
+    (user principal)
+  )
+  (map-get? user-predictions {
+    market-id: market-id,
+    user: user,
+  })
+)
+
+(define-read-only (get-contract-balance)
+  (stx-get-balance (as-contract tx-sender))
+)
+
+;; Administrative Functions
+
+(define-public (set-oracle-address (new-address principal))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (is-eq new-address new-address) err-invalid-parameter)
+    (ok (var-set oracle-address new-address))
+  )
+)
+
+(define-public (set-minimum-stake (new-minimum uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (> new-minimum u0) err-invalid-parameter)
+    (ok (var-set minimum-stake new-minimum))
+  )
+)
+
+(define-public (set-fee-percentage (new-fee uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (<= new-fee u100) err-invalid-parameter)
+    (ok (var-set fee-percentage new-fee))
+  )
+)
+
+(define-public (withdraw-fees (amount uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (<= amount (stx-get-balance (as-contract tx-sender)))
+      err-insufficient-balance
+    )
+    (try! (as-contract (stx-transfer? amount (as-contract tx-sender) contract-owner)))
+    (ok amount)
+  )
+)
